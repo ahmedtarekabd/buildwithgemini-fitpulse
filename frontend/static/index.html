@@ -296,6 +296,7 @@
   .a2text.a2-caption { font-size: 0.85rem; color: var(--text-muted); }
   .a2divider { border: none; border-top: 1px solid var(--border); margin: 0.5rem 0; width: 100%; }
   .a2img { max-width: 100%; border-radius: 12px; display: block; border: 1px solid var(--border); }
+  .a2video { max-width: 100%; width: 100%; border-radius: 12px; display: block; margin-top: 0.5rem; border: 1px solid var(--border); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3); }
   .material-symbols-outlined { font-family: 'Material Symbols Outlined'; font-size: 1.25rem; line-height: 1; vertical-align: middle; color: var(--accent); }
 </style>
 </head>
@@ -419,9 +420,20 @@ function buildNode(id, comps, seen) {
     }
     case "Divider":
       return el("hr", "a2divider");
+    case "Video":
     case "Image": {
       const src = boundStr(props.url || props.src);
       if (!/^https?:\/\//i.test(src)) return null;
+      if (type === "Video" || /\.mp4(\?|$)/i.test(src) || /workout_videos/i.test(src) || /\.webm(\?|$)/i.test(src)) {
+        const v = el("video", "a2video");
+        v.src = src;
+        v.controls = true;
+        v.autoplay = true;
+        v.loop = true;
+        v.muted = true;
+        v.playsInline = true;
+        return v;
+      }
       const img = el("img", "a2img"); img.src = src; img.alt = boundStr(props.alt) || ""; return img;
     }
     case "Icon": {
@@ -465,8 +477,39 @@ function renderReply(b, parts) {
   const texts = parts.filter(p => p && (p.kind === "text" || (!p.kind && p.text))).map(p => p.text || "");
   const a2ui = parts.filter(p => p && p.kind === "a2ui" && p.data).map(p => p.data);
 
-  const textStr = texts.join("\n").trim();
-  if (textStr) b.appendChild(el("div", null, textStr));
+  for (let textStr of texts) {
+    textStr = textStr.replace(/<\/?(?:a2a_datapart_json|a2ui-json|a2ui)[^>]*>/gi, "").trim();
+    if (!textStr) continue;
+
+    const videoUrlRegex = /(https?:\/\/[^\s"'<>]+\.(?:mp4|webm|mov)(?:\?[^\s"'<>]*)?)/gi;
+    let lastIdx = 0;
+    let match;
+    const textNode = el("div");
+
+    while ((match = videoUrlRegex.exec(textStr)) !== null) {
+      const before = textStr.substring(lastIdx, match.index).trim();
+      if (before) textNode.appendChild(document.createTextNode(before + "\n"));
+
+      const videoUrl = match[0];
+      const video = el("video", "a2video");
+      video.src = videoUrl;
+      video.controls = true;
+      video.autoplay = true;
+      video.loop = true;
+      video.muted = true;
+      video.playsInline = true;
+      textNode.appendChild(video);
+
+      lastIdx = match.index + match[0].length;
+    }
+
+    const after = textStr.substring(lastIdx).trim();
+    if (after) textNode.appendChild(document.createTextNode(after));
+
+    if (textNode.childNodes.length > 0) {
+      b.appendChild(textNode);
+    }
+  }
 
   if (a2ui.length) {
     b.classList.add("rich");

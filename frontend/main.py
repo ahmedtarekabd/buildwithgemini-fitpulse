@@ -121,31 +121,70 @@ def _extract_parts(parts: list) -> list[dict]:
             if "Cannot add session to memory" in txt:
                 continue
 
-            # Case 1: Check if text is wrapped in <a2ui-json> or <a2a_datapart_json>
-            match = re.search(
-                r"<(?:a2a_datapart_json|a2ui-json)>([\s\S]*?)</(?:a2a_datapart_json|a2ui-json)>",
-                txt,
-            )
-            if match:
-                raw_inner = match.group(1).strip()
-                try:
-                    data = json.loads(raw_inner)
-                    if isinstance(data, dict) and "data" in data:
-                        data = data["data"]
-                    if isinstance(data, list):
-                        for item in data:
-                            out.append({"kind": "a2ui", "data": item})
-                    else:
-                        out.append({"kind": "a2ui", "data": data})
-                    continue
-                except Exception:
-                    pass
+            # Case 1: Check for <a2ui-json>, <a2ui>, or <a2a_datapart_json> blocks
+            tag_pattern = r"<(?:a2a_datapart_json|a2ui-json|a2ui)>([\s\S]*?)(?:</(?:a2a_datapart_json|a2ui-json|a2ui)>|$)"
+            matches = list(re.finditer(tag_pattern, txt))
 
-            # Case 2: Check if text is raw JSON A2UI array or object
+            if matches:
+                last_end = 0
+                for match in matches:
+                    prefix = txt[last_end:match.start()].strip()
+                    if prefix:
+                        prefix_clean = re.sub(r"</?(?:a2a_datapart_json|a2ui-json|a2ui)[^>]*>", "", prefix).strip()
+                        if prefix_clean:
+                            out.append({"kind": "text", "text": prefix_clean})
+
+                    raw_inner = match.group(1).strip()
+                    try:
+                        data = json.loads(raw_inner)
+                        if isinstance(data, dict) and "data" in data:
+                            data = data["data"]
+                        if isinstance(data, list):
+                            for item in data:
+                                out.append({"kind": "a2ui", "data": item})
+                        else:
+                            out.append({"kind": "a2ui", "data": data})
+                    except Exception:
+                        found_json = False
+                        decoder = json.JSONDecoder()
+                        idx = 0
+                        n = len(raw_inner)
+                        while idx < n:
+                            while idx < n and raw_inner[idx] not in "{[":
+                                idx += 1
+                            if idx >= n:
+                                break
+                            try:
+                                val, end = decoder.raw_decode(raw_inner, idx)
+                                if isinstance(val, dict) and "data" in val:
+                                    val = val["data"]
+                                if isinstance(val, list):
+                                    for item in val:
+                                        out.append({"kind": "a2ui", "data": item})
+                                else:
+                                    out.append({"kind": "a2ui", "data": val})
+                                found_json = True
+                                idx = end
+                            except Exception:
+                                break
+
+                        if not found_json:
+                            clean_text = re.sub(r"</?(?:a2a_datapart_json|a2ui-json|a2ui)[^>]*>", "", raw_inner).strip()
+                            if clean_text:
+                                out.append({"kind": "text", "text": clean_text})
+
+                    last_end = match.end()
+
+                suffix = txt[last_end:].strip()
+                if suffix:
+                    suffix_clean = re.sub(r"</?(?:a2a_datapart_json|a2ui-json|a2ui)[^>]*>", "", suffix).strip()
+                    if suffix_clean:
+                        out.append({"kind": "text", "text": suffix_clean})
+                continue
+
+            # Case 2: Check if text starts with raw JSON array or object containing A2UI keys
             if (txt.startswith("[") or txt.startswith("{")) and (
-                "surfaceId" in txt
-                or "surfaceUpdate" in txt
-                or "beginRendering" in txt
+                "surfaceId" in txt or "surfaceUpdate" in txt or "beginRendering" in txt
             ):
                 try:
                     data = json.loads(txt)
@@ -158,7 +197,10 @@ def _extract_parts(parts: list) -> list[dict]:
                 except Exception:
                     pass
 
-            out.append({"kind": "text", "text": txt})
+            # Case 3: Plain text - strip any leftover a2ui tags
+            clean_txt = re.sub(r"</?(?:a2a_datapart_json|a2ui-json|a2ui)[^>]*>", "", txt).strip()
+            if clean_txt:
+                out.append({"kind": "text", "text": clean_txt})
 
         elif getattr(root, "data", None) is not None:
             meta = getattr(root, "metadata", None) or {}
